@@ -71,7 +71,7 @@ def api_signup():
             (username, email, hashed_password)
         )
         conn.commit()
-        return jsonify({'message': 'Account created successfully'}), 201
+        return jsonify({'message': 'Account created successfully'}), 200
 
     except mysql.connector.IntegrityError:
         return jsonify({'error': 'Username or email already exists'}), 409
