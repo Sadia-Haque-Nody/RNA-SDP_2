@@ -6,9 +6,13 @@ from flask_cors import CORS
 app = Flask(__name__)
 app.secret_key = 'NO_D_ASH_A_ROOF_E'
 
+<<<<<<< HEAD
 CORS(app)
 
 # Database connection
+=======
+# Database connection helper
+>>>>>>> 58b6c80c022b6bc7d6d1e351e735687ddde8b4ef
 def get_db_connection():
     return mysql.connector.connect(
         host='localhost',
@@ -162,14 +166,22 @@ def meal_details(meal_id):
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
 
+<<<<<<< HEAD
         # Get meal details
         cursor.execute("SELECT * FROM Meals WHERE meal_id = %s", (meal_id,))
         meal = cursor.fetchone()
 
         if not meal:
             return jsonify({"error": "Meal not found"}), 404
+=======
+        # Get meal
+        cursor.execute('SELECT * FROM Meals WHERE meal_id = %s', (meal_id,))
+        meal = cursor.fetchone()
 
-        # Get ingredients
+        if not meal:
+            return jsonify({'error': 'Meal not found'}), 404
+>>>>>>> 58b6c80c022b6bc7d6d1e351e735687ddde8b4ef
+
         # Get ingredients
         cursor.execute('''
             SELECT i.ingredient_name, mi.quantity, i.unit
@@ -179,6 +191,7 @@ def meal_details(meal_id):
         ''', (meal_id,))
         ingredients = cursor.fetchall()
 
+<<<<<<< HEAD
         # Build JSON response
         response = {
             "meal_id": meal['meal_id'],
@@ -208,6 +221,31 @@ def meal_details(meal_id):
             cursor.close()
         if 'conn' in locals():
             conn.close()
+=======
+        # Ordered response
+        response = OrderedDict()
+        response['name'] = meal.get('meal_name', 'N/A')
+        response['calories'] = meal.get('calories', 'N/A')
+        response['protein'] = f"{meal['protein_g']:.2f}g" if meal.get('protein_g') is not None else "N/A"
+        response['carbs'] = f"{meal['carbs_g']:.2f}g" if meal.get('carbs_g') is not None else "N/A"
+        response['fat'] = f"{meal['fat_g']:.2f}g" if meal.get('fat_g') is not None else "N/A"
+        response['ingredients'] = [
+            {
+                'name': ing['ingredient_name'],
+                'quantity': f"{float(ing['quantity']):.2f} {ing['unit']}"
+            }
+            for ing in ingredients
+        ]
+
+        # Return as formatted JSON
+        return Response(json.dumps(response, indent=4), mimetype='application/json')
+
+    except Exception as e:
+        import traceback
+        print("Error in meal_details:", traceback.format_exc())
+        return jsonify({'error': 'Error retrieving meal details'}), 500
+
+>>>>>>> 58b6c80c022b6bc7d6d1e351e735687ddde8b4ef
 
 
 @app.route('/api/add_to_plan/<int:meal_id>', methods=['POST'])

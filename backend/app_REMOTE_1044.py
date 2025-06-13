@@ -1,14 +1,11 @@
 from flask import Flask, jsonify, request, session
 from werkzeug.security import generate_password_hash, check_password_hash
 import mysql.connector
-from flask_cors import CORS
 
 app = Flask(__name__)
 app.secret_key = 'NO_D_ASH_A_ROOF_E'
 
-CORS(app)
-
-# Database connection
+# Database connection helper
 def get_db_connection():
     return mysql.connector.connect(
         host='localhost',
@@ -162,14 +159,13 @@ def meal_details(meal_id):
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
 
-        # Get meal details
-        cursor.execute("SELECT * FROM Meals WHERE meal_id = %s", (meal_id,))
+        # Get meal
+        cursor.execute('SELECT * FROM Meals WHERE meal_id = %s', (meal_id,))
         meal = cursor.fetchone()
 
         if not meal:
-            return jsonify({"error": "Meal not found"}), 404
+            return jsonify({'error': 'Meal not found'}), 404
 
-        # Get ingredients
         # Get ingredients
         cursor.execute('''
             SELECT i.ingredient_name, mi.quantity, i.unit
@@ -179,35 +175,29 @@ def meal_details(meal_id):
         ''', (meal_id,))
         ingredients = cursor.fetchall()
 
-        # Build JSON response
-        response = {
-            "meal_id": meal['meal_id'],
-            "name": meal['meal_name'],
-            "description": meal.get('description', ''),  # Using get() in case description is optional
-            "calories": meal['calories'],
-            "protein": meal['protein_g'],
-            "carbs": meal['carbs_g'],
-            "fat": meal['fat_g'],
-            "image_url": meal.get('image_url', ''),  # Assuming you might have an image URL
-            "ingredients": [
-                {
-                    "name": ingr['ingredient_name'],
-                    "quantity": ingr['quantity'],
-                    "unit": ingr['unit']
-                } for ingr in ingredients
-            ]
-        }
+        # Ordered response
+        response = OrderedDict()
+        response['name'] = meal.get('meal_name', 'N/A')
+        response['calories'] = meal.get('calories', 'N/A')
+        response['protein'] = f"{meal['protein_g']:.2f}g" if meal.get('protein_g') is not None else "N/A"
+        response['carbs'] = f"{meal['carbs_g']:.2f}g" if meal.get('carbs_g') is not None else "N/A"
+        response['fat'] = f"{meal['fat_g']:.2f}g" if meal.get('fat_g') is not None else "N/A"
+        response['ingredients'] = [
+            {
+                'name': ing['ingredient_name'],
+                'quantity': f"{float(ing['quantity']):.2f} {ing['unit']}"
+            }
+            for ing in ingredients
+        ]
 
-        return jsonify(response), 200
+        # Return as formatted JSON
+        return Response(json.dumps(response, indent=4), mimetype='application/json')
 
     except Exception as e:
-        print("Error in meal_detail:", e)
-        return jsonify({"error": "Something went wrong"}), 500
-    finally:
-        if 'cursor' in locals():
-            cursor.close()
-        if 'conn' in locals():
-            conn.close()
+        import traceback
+        print("Error in meal_details:", traceback.format_exc())
+        return jsonify({'error': 'Error retrieving meal details'}), 500
+
 
 
 @app.route('/api/add_to_plan/<int:meal_id>', methods=['POST'])
