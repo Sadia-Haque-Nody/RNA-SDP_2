@@ -1,9 +1,12 @@
 from flask import Flask, jsonify, request, session
 from werkzeug.security import generate_password_hash, check_password_hash
 import mysql.connector
+from flask_cors import CORS
 
 app = Flask(__name__)
 app.secret_key = 'NO_D_ASH_A_ROOF_E'
+
+CORS(app)
 
 # Database connection
 def get_db_connection():
@@ -180,12 +183,14 @@ def api_meal_detail(meal_id):
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
 
+        # Get meal details
         cursor.execute("SELECT * FROM Meals WHERE meal_id = %s", (meal_id,))
         meal = cursor.fetchone()
 
         if not meal:
-            return "Meal not found", 404
+            return jsonify({"error": "Meal not found"}), 404
 
+        # Get ingredients
         cursor.execute('''
             SELECT i.ingredient_name, mi.quantity, i.unit
             FROM Meal_Ingredients mi
@@ -194,26 +199,30 @@ def api_meal_detail(meal_id):
         ''', (meal_id,))
         ingredients = cursor.fetchall()
 
-        # Build the text response
-        response_lines = []
-        response_lines.append(meal['meal_name'])
-        response_lines.append(f"Calories: {meal['calories']}")
-        response_lines.append(f"Protein: {meal['protein_g']}g")
-        response_lines.append(f"Carbs: {meal['carbs_g']}g")
-        response_lines.append(f"Fat: {meal['fat_g']}g")
-        response_lines.append("")  # Blank line
-        response_lines.append("Ingredients:")
+        # Build JSON response
+        response = {
+            "meal_id": meal['meal_id'],
+            "name": meal['meal_name'],
+            "description": meal.get('description', ''),  # Using get() in case description is optional
+            "calories": meal['calories'],
+            "protein": meal['protein_g'],
+            "carbs": meal['carbs_g'],
+            "fat": meal['fat_g'],
+            "image_url": meal.get('image_url', ''),  # Assuming you might have an image URL
+            "ingredients": [
+                {
+                    "name": ingr['ingredient_name'],
+                    "quantity": ingr['quantity'],
+                    "unit": ingr['unit']
+                } for ingr in ingredients
+            ]
+        }
 
-        for ingr in ingredients:
-            line = f"{ingr['ingredient_name']} {ingr['quantity']} {ingr['unit']}"
-            response_lines.append(line)
-
-        response_text = "\n".join(response_lines)
-        return response_text, 200, {'Content-Type': 'text/plain'}
+        return jsonify(response), 200
 
     except Exception as e:
         print("Error in meal_detail:", e)
-        return "Something went wrong", 500
+        return jsonify({"error": "Something went wrong"}), 500
     finally:
         if 'cursor' in locals():
             cursor.close()
