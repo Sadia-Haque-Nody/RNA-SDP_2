@@ -176,6 +176,23 @@ def api_by_preference():
         if 'cursor' in locals(): cursor.close()
         if 'conn' in locals(): conn.close()
 
+        
+@app.route('/api/all_meals', methods=['GET'])
+def api_all_meals():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM Meals")
+        meals = cursor.fetchall()
+        return jsonify(meals), 200
+    except Exception as e:
+        print("Error fetching all meals:", e)
+        return jsonify({'error': 'Something went wrong'}), 500
+    finally:
+        if 'cursor' in locals(): cursor.close()
+        if 'conn' in locals(): conn.close()
+
+
 
 @app.route('/api/meal/<int:meal_id>', methods=['GET'])
 def api_meal_detail(meal_id):
