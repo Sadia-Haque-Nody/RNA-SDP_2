@@ -149,7 +149,7 @@ def api_by_ingredient():
         if ingredients:
             placeholders = ', '.join(['%s'] * len(ingredients))
             query = f'''
-                SELECT  m.meal_name, m.tags
+                SELECT m.*
                 FROM Meals m
                 JOIN Meal_Ingredients mi ON m.meal_id = mi.meal_id
                 JOIN Ingredients i ON mi.ingredient_id = i.ingredient_id
@@ -171,7 +171,6 @@ def api_by_ingredient():
         if 'cursor' in locals(): cursor.close()
         if 'conn' in locals(): conn.close()
 
-
 @app.route('/api/by_preference', methods=['POST'])
 def api_by_preference():
     try:
@@ -180,7 +179,7 @@ def api_by_preference():
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
 
-        query = "SELECT m.meal_name, m.tags FROM Meals m WHERE LOWER(CONCAT(',', m.tags, ',')) LIKE %s"
+        query = "SELECT m.* FROM Meals m WHERE LOWER(CONCAT(',', m.tags, ',')) LIKE %s"
         cursor.execute(query, ("%,{}%,".format(preference),))
         meals = cursor.fetchall()
         return jsonify(meals)
@@ -191,7 +190,6 @@ def api_by_preference():
     finally:
         if 'cursor' in locals(): cursor.close()
         if 'conn' in locals(): conn.close()
-
 
 @app.route('/api/all_meals', methods=['GET'])
 def api_all_meals():
