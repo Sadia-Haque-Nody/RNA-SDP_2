@@ -2,6 +2,7 @@ from flask import Flask, jsonify, request, session
 from werkzeug.security import generate_password_hash, check_password_hash
 import mysql.connector
 from flask_cors import CORS
+from functools import wraps
 
 app = Flask(__name__)
 app.secret_key = 'NO_D_ASH_A_ROOF_E'
@@ -16,6 +17,16 @@ def get_db_connection():
         password='123',
         database='mymealplanner'
     )
+
+# Decorator to require login session
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user_id' not in session:
+            return jsonify({'error': 'Not authenticated'}), 401
+        return f(*args, **kwargs)
+    return decorated_function
+
 
 @app.route('/api/test_db')
 def test_db():
@@ -43,6 +54,7 @@ def check_session():
         return jsonify({'logged_in': True, 'user_id': user_id}), 200
     else:
         return jsonify({'logged_in': False}), 200
+
 
 @app.route('/api/signup', methods=['POST'])
 def api_signup():
@@ -84,6 +96,7 @@ def api_signup():
         if 'cursor' in locals(): cursor.close()
         if 'conn' in locals(): conn.close()
 
+
 @app.route('/api/login', methods=['POST'])
 def api_login():
     if session.get('user_id'):
@@ -117,10 +130,13 @@ def api_login():
         if 'cursor' in locals(): cursor.close()
         if 'conn' in locals(): conn.close()
 
+
 @app.route('/api/logout', methods=['POST'])
+@login_required
 def api_logout():
     session.clear()
     return jsonify({'message': 'Logged out successfully'}), 200
+
 
 # ===== Meal APIs =====
 
@@ -176,7 +192,7 @@ def api_by_preference():
         if 'cursor' in locals(): cursor.close()
         if 'conn' in locals(): conn.close()
 
-        
+
 @app.route('/api/all_meals', methods=['GET'])
 def api_all_meals():
     try:
@@ -191,7 +207,6 @@ def api_all_meals():
     finally:
         if 'cursor' in locals(): cursor.close()
         if 'conn' in locals(): conn.close()
-
 
 
 @app.route('/api/meal/<int:meal_id>', methods=['GET'])
@@ -220,12 +235,12 @@ def api_meal_detail(meal_id):
         response = {
             "meal_id": meal['meal_id'],
             "name": meal['meal_name'],
-            "description": meal.get('description', ''),  # Using get() in case description is optional
+            "description": meal.get('description', ''),
             "calories": meal['calories'],
             "protein": meal['protein_g'],
             "carbs": meal['carbs_g'],
             "fat": meal['fat_g'],
-            "image_url": meal.get('image_url', ''),  # Assuming you might have an image URL
+            "image_url": meal.get('image_url', ''),
             "ingredients": [
                 {
                     "name": ingr['ingredient_name'],
@@ -248,10 +263,9 @@ def api_meal_detail(meal_id):
 
 
 @app.route('/api/add_to_plan/<int:meal_id>', methods=['POST'])
+@login_required
 def api_add_to_plan(meal_id):
     user_id = session.get('user_id')
-    if not user_id:
-        return jsonify({'error': 'Not authenticated'}), 401
 
     try:
         data = request.json
@@ -293,11 +307,11 @@ def api_add_to_plan(meal_id):
         if 'cursor' in locals(): cursor.close()
         if 'conn' in locals(): conn.close()
 
+
 @app.route('/api/meal_plan_with_totals', methods=['GET'])
+@login_required
 def get_meal_plan_with_totals():
     user_id = session.get('user_id')
-    if not user_id:
-        return jsonify({'error': 'Not authenticated'}), 401
 
     try:
         conn = get_db_connection()
@@ -349,31 +363,27 @@ def get_meal_plan_with_totals():
         if 'cursor' in locals(): cursor.close()
         if 'conn' in locals(): conn.close()
 
+
 @app.route('/api/remove_from_plan', methods=['POST'])
+@login_required
 def api_remove_from_plan():
     user_id = session.get('user_id')
-    if not user_id:
-        return jsonify({'error': 'Not authenticated'}), 401
 
     data = request.json
     day = data.get('day')
     meal_type = data.get('meal_type')
 
     if not day or not meal_type:
-        return jsonify({'error': 'Day and meal_type are required'}), 400
+        return jsonify({'error': 'Day and meal_type required'}), 400
 
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-
-        # Delete the meal plan entry for that user, day, and meal_type
         cursor.execute('''
             DELETE FROM Meal_Plan
             WHERE user_id = %s AND day = %s AND meal_type = %s
         ''', (user_id, day, meal_type))
-
         conn.commit()
-
         return jsonify({'message': 'Meal removed from your plan'})
 
     except Exception as e:
@@ -381,56 +391,24 @@ def api_remove_from_plan():
         return jsonify({'error': 'Something went wrong'}), 500
 
     finally:
-        if 'cursor' in locals():
-            cursor.close()
-        if 'conn' in locals():
-            conn.close()
-@app.route('/api/meal_plan_clear_all', methods=['DELETE'])
-def api_clear_all_meal_plan():
+        if 'cursor' in locals(): cursor.close()
+        if 'conn' in locals(): conn.close()
+
+
+@app.route('/api/delete_all_meals', methods=['POST'])
+@login_required
+def api_delete_all_meals():
     user_id = session.get('user_id')
-    if not user_id:
-        return jsonify({'error': 'Not authenticated'}), 401
 
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-
-        # Delete all meal plan entries for this user
         cursor.execute('DELETE FROM Meal_Plan WHERE user_id = %s', (user_id,))
         conn.commit()
-
-        return jsonify({'message': 'All meal plans cleared successfully'}), 200
-
-    except Exception as e:
-        print("Error clearing meal plan:", e)
-        return jsonify({'error': 'Something went wrong'}), 500
-
-    finally:
-        if 'cursor' in locals():
-            cursor.close()
-        if 'conn' in locals():
-            conn.close()
-
-@app.route('/api/get_username', methods=['GET'])
-def get_username():
-    user_id = session.get('user_id')
-    if not user_id:
-        return jsonify({'error': 'Not authenticated'}), 401
-
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-
-        cursor.execute("SELECT name FROM Users WHERE user_id = %s", (user_id,))
-        user = cursor.fetchone()
-
-        if user:
-            return jsonify({'name': user['name']})
-        else:
-            return jsonify({'error': 'User not found'}), 404
+        return jsonify({'message': 'All meals removed from your plan'})
 
     except Exception as e:
-        print("Error in get_username:", e)
+        print("Error in delete_all_meals:", e)
         return jsonify({'error': 'Something went wrong'}), 500
 
     finally:
@@ -438,5 +416,31 @@ def get_username():
         if 'conn' in locals(): conn.close()
 
 
-if __name__ == '__main__':
+# ===== User Info APIs =====
+
+@app.route('/api/get_username', methods=['GET'])
+@login_required
+def get_username():
+    user_id = session.get('user_id')
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT username FROM Users WHERE user_id = %s", (user_id,))
+        row = cursor.fetchone()
+        if row:
+            return jsonify({'username': row[0]}), 200
+        else:
+            return jsonify({'error': 'User not found'}), 404
+
+    except Exception as e:
+        print("Error in get_username:", e)
+        return jsonify({'error': 'Server error'}), 500
+
+    finally:
+        if 'cursor' in locals(): cursor.close()
+        if 'conn' in locals(): conn.close()
+
+
+if __name__ == "__main__":
     app.run(debug=True)
