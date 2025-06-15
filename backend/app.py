@@ -1,11 +1,13 @@
-from flask import Flask, jsonify, request, session
+from flask import Flask, jsonify, request
 from werkzeug.security import generate_password_hash, check_password_hash
 import mysql.connector
 from flask_cors import CORS
 from functools import wraps
+import jwt
+import datetime
 
 app = Flask(__name__)
-app.secret_key = 'NO_D_ASH_A_ROOF_E'
+app.config['SECRET_KEY'] = 'NO_D_ASH_A_ROOF_E'
 
 CORS(app)
 
@@ -18,22 +20,36 @@ def get_db_connection():
         database='mymealplanner'
     )
 
-# Decorator to require login session
-def login_required(f):
+# JWT authentication decorator
+def token_required(f):
     @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if 'user_id' not in session:
-            return jsonify({'error': 'Not authenticated'}), 401
-        return f(*args, **kwargs)
-    return decorated_function
+    def decorated(*args, **kwargs):
+        token = None
+        if 'Authorization' in request.headers:
+            parts = request.headers['Authorization'].split()
+            if len(parts) == 2 and parts[0] == 'Bearer':
+                token = parts[1]
 
+        if not token:
+            return jsonify({'error': 'Token is missing!'}), 401
+
+        try:
+            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+            current_user_id = data['user_id']
+        except jwt.ExpiredSignatureError:
+            return jsonify({'error': 'Token expired'}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({'error': 'Invalid token'}), 401
+
+        return f(current_user_id, *args, **kwargs)
+    return decorated
 
 @app.route('/api/test_db')
 def test_db():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT 1")  # Simple test query
+        cursor.execute("SELECT 1")
         result = cursor.fetchone()
         cursor.close()
         conn.close()
@@ -43,18 +59,6 @@ def test_db():
             return jsonify({'message': 'Unexpected result from database.'}), 500
     except Exception as e:
         return jsonify({'error': f'Database connection failed: {str(e)}'}), 500
-
-
-# ===== Authentication APIs =====
-
-@app.route('/api/check_session', methods=['GET'])
-def check_session():
-    user_id = session.get('user_id')
-    if user_id:
-        return jsonify({'logged_in': True, 'user_id': user_id}), 200
-    else:
-        return jsonify({'logged_in': False}), 200
-
 
 @app.route('/api/signup', methods=['POST'])
 def api_signup():
@@ -66,10 +70,8 @@ def api_signup():
 
     if not username or not email or not password:
         return jsonify({'error': 'All fields are required'}), 400
-
     if len(password) < 6:
         return jsonify({'error': 'Password must be at least 6 characters'}), 400
-
     if password != confirm_password:
         return jsonify({'error': 'Passwords do not match'}), 400
 
@@ -78,31 +80,21 @@ def api_signup():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO Users (username, email, password) VALUES (%s, %s, %s)",
-            (username, email, hashed_password)
-        )
+        cursor.execute("INSERT INTO Users (username, email, password) VALUES (%s, %s, %s)",
+                       (username, email, hashed_password))
         conn.commit()
         return jsonify({'message': 'Account created successfully'}), 200
-
     except mysql.connector.IntegrityError:
         return jsonify({'error': 'Username or email already exists'}), 409
-
     except Exception as e:
         print("Signup error:", e)
         return jsonify({'error': 'Server error'}), 500
-
     finally:
         if 'cursor' in locals(): cursor.close()
         if 'conn' in locals(): conn.close()
 
-
 @app.route('/api/login', methods=['POST'])
 def api_login():
-    if session.get('user_id'):
-        # User already logged in
-        return jsonify({'message': 'Already logged in'}), 200
-
     data = request.json
     username = data.get('username', '').strip()
     password = data.get('password', '')
@@ -117,35 +109,25 @@ def api_login():
         user = cursor.fetchone()
 
         if user and check_password_hash(user['password'], password):
-            session['user_id'] = user['user_id']
-            return jsonify({'message': 'Login successful'}), 200
+            token = jwt.encode({
+                'user_id': user['user_id'],
+                'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24)
+            }, app.config['SECRET_KEY'], algorithm="HS256")
+            return jsonify({'message': 'Login successful', 'token': token}), 200
         else:
             return jsonify({'error': 'Invalid username or password'}), 401
-
     except Exception as e:
         print("Login error:", e)
         return jsonify({'error': 'Server error'}), 500
-
     finally:
         if 'cursor' in locals(): cursor.close()
         if 'conn' in locals(): conn.close()
-
-
-@app.route('/api/logout', methods=['POST'])
-@login_required
-def api_logout():
-    session.clear()
-    return jsonify({'message': 'Logged out successfully'}), 200
-
-
-# ===== Meal APIs =====
 
 @app.route('/api/by_ingredient', methods=['POST'])
 def api_by_ingredient():
     try:
         ingredients = request.json.get('ingredients', [])
         meals = []
-
         if ingredients:
             placeholders = ', '.join(['%s'] * len(ingredients))
             query = f'''
@@ -157,13 +139,11 @@ def api_by_ingredient():
                 GROUP BY m.meal_id
                 HAVING COUNT(DISTINCT i.ingredient_name) = %s;
             '''
-
             conn = get_db_connection()
             cursor = conn.cursor(dictionary=True)
             cursor.execute(query, ingredients + [len(ingredients)])
             meals = cursor.fetchall()
         return jsonify(meals)
-
     except Exception as e:
         print("Error in by_ingredient:", e)
         return jsonify({'error': 'Something went wrong'}), 500
@@ -175,15 +155,12 @@ def api_by_ingredient():
 def api_by_preference():
     try:
         preference = request.json.get('preference', '').strip().lower()
-        print("Searching tags for preference:", preference)
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
-
         query = "SELECT m.* FROM Meals m WHERE LOWER(CONCAT(',', m.tags, ',')) LIKE %s"
         cursor.execute(query, ("%,{}%,".format(preference),))
         meals = cursor.fetchall()
         return jsonify(meals)
-
     except Exception as e:
         print("Error in by_preference:", e)
         return jsonify({'error': 'Something went wrong'}), 500
@@ -206,21 +183,16 @@ def api_all_meals():
         if 'cursor' in locals(): cursor.close()
         if 'conn' in locals(): conn.close()
 
-
 @app.route('/api/meal/<int:meal_id>', methods=['GET'])
 def api_meal_detail(meal_id):
     try:
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
-
-        # Get meal details
         cursor.execute("SELECT * FROM Meals WHERE meal_id = %s", (meal_id,))
         meal = cursor.fetchone()
-
         if not meal:
             return jsonify({"error": "Meal not found"}), 404
 
-        # Get ingredients
         cursor.execute('''
             SELECT i.ingredient_name, mi.quantity, i.unit
             FROM Meal_Ingredients mi
@@ -229,7 +201,6 @@ def api_meal_detail(meal_id):
         ''', (meal_id,))
         ingredients = cursor.fetchall()
 
-        # Build JSON response
         response = {
             "meal_id": meal['meal_id'],
             "name": meal['meal_name'],
@@ -248,33 +219,23 @@ def api_meal_detail(meal_id):
             ],
             "tags": meal['tags']
         }
-
         return jsonify(response), 200
-
     except Exception as e:
         print("Error in meal_detail:", e)
         return jsonify({"error": "Something went wrong"}), 500
     finally:
-        if 'cursor' in locals():
-            cursor.close()
-        if 'conn' in locals():
-            conn.close()
-
+        if 'cursor' in locals(): cursor.close()
+        if 'conn' in locals(): conn.close()
 
 @app.route('/api/add_to_plan/<int:meal_id>', methods=['POST'])
-@login_required
-def api_add_to_plan(meal_id):
-    user_id = session.get('user_id')
-
+@token_required
+def api_add_to_plan(user_id, meal_id):
     try:
         data = request.json
         selected_day = data.get('day')
         meal_type = data.get('meal_type')
-
         conn = get_db_connection()
         cursor = conn.cursor()
-
-        # Check if this user already has a meal for this day & type
         cursor.execute('''
             SELECT plan_id FROM Meal_Plan
             WHERE user_id = %s AND day = %s AND meal_type = %s
@@ -282,14 +243,12 @@ def api_add_to_plan(meal_id):
         existing_plan = cursor.fetchone()
 
         if existing_plan:
-            # Update the existing meal plan with the new meal
             cursor.execute('''
                 UPDATE Meal_Plan
                 SET meal_id = %s
                 WHERE user_id = %s AND day = %s AND meal_type = %s
             ''', (meal_id, user_id, selected_day, meal_type))
         else:
-            # Insert new plan
             cursor.execute('''
                 INSERT INTO Meal_Plan (user_id, meal_id, meal_type, day)
                 VALUES (%s, %s, %s, %s)
@@ -297,26 +256,19 @@ def api_add_to_plan(meal_id):
 
         conn.commit()
         return jsonify({'message': 'Meal added or updated in your plan'})
-
     except Exception as e:
         print("Error in add_to_plan:", e)
         return jsonify({'error': 'Something went wrong'}), 500
-
     finally:
         if 'cursor' in locals(): cursor.close()
         if 'conn' in locals(): conn.close()
 
-
 @app.route('/api/meal_plan_with_totals', methods=['GET'])
-@login_required
-def get_meal_plan_with_totals():
-    user_id = session.get('user_id')
-
+@token_required
+def get_meal_plan_with_totals(user_id):
     try:
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
-
-        # Get meals in the plan for the user
         cursor.execute('''
             SELECT mp.day, mp.meal_type, m.meal_id, m.meal_name, m.calories, m.carbs_g, m.fat_g, m.protein_g
             FROM Meal_Plan mp
@@ -324,50 +276,31 @@ def get_meal_plan_with_totals():
             WHERE mp.user_id = %s
         ''', (user_id,))
         plans = cursor.fetchall()
-
         result = {}
 
         for row in plans:
             day = row['day']
             meal_type = row['meal_type']
-
             if day not in result:
-                result[day] = {
-                    'meals': {},
-                    'totals': {
-                        'calories': 0,
-                        'carbs_g': 0,
-                        'fat_g': 0,
-                        'protein_g': 0
-                    }
-                }
+                result[day] = {'meals': {}, 'totals': {'calories': 0, 'carbs_g': 0, 'fat_g': 0, 'protein_g': 0}}
 
-            result[day]['meals'][meal_type] = {
-                'meal_id': row['meal_id'],
-                'meal_name': row['meal_name']
-            }
-
-            result[day]['totals']['calories'] += int(row['calories']) if row['calories'] else 0
-            result[day]['totals']['carbs_g'] += float(row['carbs_g']) if row['carbs_g'] else 0
-            result[day]['totals']['fat_g'] += float(row['fat_g']) if row['fat_g'] else 0
-            result[day]['totals']['protein_g'] += float(row['protein_g']) if row['protein_g'] else 0
+            result[day]['meals'][meal_type] = {'meal_id': row['meal_id'], 'meal_name': row['meal_name']}
+            result[day]['totals']['calories'] += int(row['calories'] or 0)
+            result[day]['totals']['carbs_g'] += float(row['carbs_g'] or 0)
+            result[day]['totals']['fat_g'] += float(row['fat_g'] or 0)
+            result[day]['totals']['protein_g'] += float(row['protein_g'] or 0)
 
         return jsonify(result)
-
     except Exception as e:
         print("Error in meal_plan_with_totals:", e)
         return jsonify({'error': 'Something went wrong'}), 500
-
     finally:
         if 'cursor' in locals(): cursor.close()
         if 'conn' in locals(): conn.close()
 
-
 @app.route('/api/remove_from_plan', methods=['POST'])
-@login_required
-def api_remove_from_plan():
-    user_id = session.get('user_id')
-
+@token_required
+def api_remove_from_plan(user_id):
     data = request.json
     day = data.get('day')
     meal_type = data.get('meal_type')
@@ -384,44 +317,32 @@ def api_remove_from_plan():
         ''', (user_id, day, meal_type))
         conn.commit()
         return jsonify({'message': 'Meal removed from your plan'})
-
     except Exception as e:
         print("Error in remove_from_plan:", e)
         return jsonify({'error': 'Something went wrong'}), 500
-
     finally:
         if 'cursor' in locals(): cursor.close()
         if 'conn' in locals(): conn.close()
 
-
 @app.route('/api/delete_all_meals', methods=['POST'])
-@login_required
-def api_delete_all_meals():
-    user_id = session.get('user_id')
-
+@token_required
+def api_delete_all_meals(user_id):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('DELETE FROM Meal_Plan WHERE user_id = %s', (user_id,))
         conn.commit()
         return jsonify({'message': 'All meals removed from your plan'})
-
     except Exception as e:
         print("Error in delete_all_meals:", e)
         return jsonify({'error': 'Something went wrong'}), 500
-
     finally:
         if 'cursor' in locals(): cursor.close()
         if 'conn' in locals(): conn.close()
 
-
-# ===== User Info APIs =====
-
 @app.route('/api/get_username', methods=['GET'])
-@login_required
-def get_username():
-    user_id = session.get('user_id')
-
+@token_required
+def get_username(user_id):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -431,15 +352,12 @@ def get_username():
             return jsonify({'username': row[0]}), 200
         else:
             return jsonify({'error': 'User not found'}), 404
-
     except Exception as e:
         print("Error in get_username:", e)
         return jsonify({'error': 'Server error'}), 500
-
     finally:
         if 'cursor' in locals(): cursor.close()
         if 'conn' in locals(): conn.close()
-
 
 if __name__ == "__main__":
     app.run(debug=True)
