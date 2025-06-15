@@ -245,7 +245,8 @@ def api_meal_detail(meal_id):
                     "quantity": ingr['quantity'],
                     "unit": ingr['unit']
                 } for ingr in ingredients
-            ]
+            ],
+            "tags": meal['tags']
         }
 
         return jsonify(response), 200
